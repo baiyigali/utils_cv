@@ -1,39 +1,91 @@
 import pandas as pd
 from nltk import edit_distance
+import numpy as np
+from utils_cv.utils_box import get_iou
 
 
-def get_match_num(texts_gt, texts_pd, ed_thresh=0):
+def get_match_info(texts_gt, texts_pd, boxes_gt, boxes_pd, ed_thresh=0, iou_thresh=0):
     """
     texts_gt: [text1, text2], ground truth texts on one page
     texts_pd: [text1, text2], predicted texts on one page
+    boxes_gt: [box1, box2], ground truth boxes on one page
+    boxes_pd: [box1, box2], predicted boxes on one page
     """
-    texts_gt = " ".join(texts_gt).split()
-    texts_pd = " ".join(texts_pd).split()
-    texts_pd = list(texts_pd)  # copy
-    texts_gt = list(texts_gt)
-    texts_pd = sorted(texts_pd)
-    texts_gt = sorted(texts_gt)
+    boxes_gt = np.array(boxes_gt, dtype=np.int32).reshape([-1, 4]).copy().tolist()
+    boxes_pd = np.array(boxes_pd, dtype=np.int32).reshape([-1, 4]).copy().tolist()
+    texts_gt = list(texts_gt)  # copy
+    texts_pd = list(texts_pd)
+    assert len(texts_gt) == len(boxes_gt)
+    assert len(texts_pd) == len(boxes_pd)
 
     num_tp = 0
     pop_list = []
-    for i, text_gt in enumerate(texts_gt):
-        for j, text_pd in enumerate(texts_pd):
-            if text_gt == text_pd:
-                texts_pd.pop(j)
+    unmatch_idxs_gt = list(range(len(texts_gt)))
+    unmatch_idxs_pd = list(range(len(texts_pd)))
+
+    i = 0
+    while i < len(unmatch_idxs_gt):
+        j = 0
+        gti = unmatch_idxs_gt[i]
+        box_gt = boxes_gt[gti]
+        text_gt = texts_gt[gti]
+        is_matched = False
+        while j < len(unmatch_idxs_pd):
+            pdj = unmatch_idxs_pd[j]
+            box_pd = boxes_pd[pdj]
+            text_pd = texts_pd[pdj]
+            if text_gt == text_pd and get_iou(box_gt, box_pd) > iou_thresh:
+                unmatch_idxs_gt.pop(i)
+                unmatch_idxs_pd.pop(j)
                 num_tp += 1
-                pop_list.append(i)
+                is_matched = True
                 break
+            j += 1
+        if not is_matched:
+            i += 1
 
-    texts_gt = [texts_gt[i] for i in range(len(texts_gt)) if i not in pop_list]
-
-    for text_gt in texts_gt:
-        for j, text_pd in enumerate(texts_pd):
-            if edit_distance(text_gt, text_pd) <= ed_thresh:
-                texts_pd.pop(j)
+    i = 0
+    while i < len(unmatch_idxs_gt):
+        j = 0
+        gti = unmatch_idxs_gt[i]
+        box_gt = boxes_gt[gti]
+        text_gt = texts_gt[gti]
+        is_matched = False
+        while j < len(unmatch_idxs_pd):
+            pdj = unmatch_idxs_pd[j]
+            box_pd = boxes_pd[pdj]
+            text_pd = texts_pd[pdj]
+            if (
+                edit_distance(text_gt, text_pd) <= ed_thresh
+                and get_iou(box_gt, box_pd) > iou_thresh
+            ):
+                unmatch_idxs_gt.pop(i)
+                unmatch_idxs_pd.pop(j)
                 num_tp += 1
+                is_matched = True
                 break
+            j += 1
+        if not is_matched:
+            i += 1
 
-    return num_tp
+    unmatch_list = []
+    for i in unmatch_idxs_gt:
+        pds = []
+        for j in unmatch_idxs_pd:
+            iou = get_iou(boxes_gt[i], boxes_pd[j])
+            if iou > iou_thresh:
+                pds.append([boxes_pd[j], texts_pd[j], iou])
+        pds = sorted(pds, key=lambda x: x[2])
+
+        row_dict = {
+            "gt": [boxes_gt[i], texts_gt[i]],
+            "pds": pds,
+        }
+
+        unmatch_list.append(row_dict)
+
+    result = {"match_num": num_tp, "unmatch_list": unmatch_list}
+    return result
 
 
 def get_prf(texts_gt, texts_pd, ed_thresh=0):
@@ -77,25 +129,49 @@ def get_prf(texts_gt, texts_pd, ed_thresh=0):
     return results
 
 
-def benchmark(df, ed_thresh=0):
+def benchmark(df, ed_thresh=0, iou_thresh=0.01):
     """
     df: dataframe must include keys, texts_gt and texts_pd, each row of them represents ground truth and prediction texts in one page
     """
     eps = 1e-12
     df = df.copy()
 
-    df["texts_gt"] = df["texts_gt"].apply(lambda x: [str(s) for s in x])
-    df["texts_pd"] = df["texts_pd"].apply(lambda x: [str(s) for s in x])
+    def split_and_flat(texts, boxes):
+        texts = list(texts)
+        boxes = list(boxes)
+        texts = [text.split() for text in texts]
+        boxes = [[box] * len(texts[i]) for (i, box) in enumerate(boxes)]
+        texts = list([text for texts_ in texts for text in texts_])
+        boxes = list([box for boxes_ in boxes for box in boxes_])
+        return texts, boxes
 
-    df["texts_gt"] = df["texts_gt"].apply(lambda x: " ".join(x).split())
-    df["texts_pd"] = df["texts_pd"].apply(lambda x: " ".join(x).split())
+    assert df["texts_gt"].apply(len).sum() == df["boxes_gt"].apply(len).sum()
+    assert df["texts_pd"].apply(len).sum() == df["boxes_pd"].apply(len).sum()
 
-    df["match_num"] = df.apply(
-        lambda row: get_match_num(
-            row["texts_gt"], row["texts_pd"], ed_thresh=ed_thresh
+    for i, row in df.iterrows():
+        row["texts_gt"], row["boxes_gt"] = split_and_flat(
+            row["texts_gt"], row["boxes_gt"]
+        )
+        row["texts_pd"], row["boxes_pd"] = split_and_flat(
+            row["texts_pd"], row["boxes_pd"]
+        )
+
+    assert df["texts_gt"].apply(len).sum() == df["boxes_gt"].apply(len).sum()
+    assert df["texts_pd"].apply(len).sum() == df["boxes_pd"].apply(len).sum()
+
+    df["match_info"] = df.apply(
+        lambda row: get_match_info(
+            row["texts_gt"],
+            row["texts_pd"],
+            row["boxes_gt"],
+            row["boxes_pd"],
+            ed_thresh=ed_thresh,
+            iou_thresh=iou_thresh,
         ),
         axis=1,
     )
+    df["match_num"] = df["match_info"].apply(lambda x: x["match_num"])
+    df["unmatch_list"] = df["match_info"].apply(lambda x: x["unmatch_list"])
     df["num_pd"] = df["texts_pd"].apply(len)
     df["num_gt"] = df["texts_gt"].apply(len)
     df["precision"] = df["match_num"] / (df[f"num_pd"] + eps)
@@ -104,8 +180,8 @@ def benchmark(df, ed_thresh=0):
         2 * df["precision"] * df["recall"] / (df["precision"] + df["recall"] + eps)
     )
 
-    precision_ = df["match_num"].sum() / (df[f"num_pd"].sum() + eps)
-    recall_ = df["match_num"].sum() / (df[f"num_gt"].sum() + eps)
+    precision_ = df["match_num"].sum() / (df["num_pd"].sum() + eps)
+    recall_ = df["match_num"].sum() / (df["num_gt"].sum() + eps)
     fmeasure_ = precision_ * recall_ * 2 / (precision_ + recall_ + eps)
 
     return precision_, recall_, fmeasure_, df

@@ -17,7 +17,10 @@ def get_iou(box1, box2):
     y1 = max(box1[1], box2[1])
     x2 = min(box1[2], box2[2])
     y2 = min(box1[3], box2[3])
-    area_inter = get_area([x1, y1, x2, y2])
+    if x1 <= x2 and y1 <= y2:
+        area_inter = get_area([x1, y1, x2, y2])
+    else:
+        area_inter = 0
 
     area_union = area1 + area2 - area_inter
 
