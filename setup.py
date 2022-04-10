@@ -2,10 +2,12 @@ import setuptools
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
+with open("VERSION", "r", encoding="utf-8") as f:
+    version = f.read().strip()
 
 setuptools.setup(
     name="utils_cv-baiyigali",
-    version="0.0.8",
+    version=version,
     author="baiyigali",
     author_email="1304646911@qq.com",
     description="A small example package",
