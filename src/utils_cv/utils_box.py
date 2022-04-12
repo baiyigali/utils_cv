@@ -3,7 +3,8 @@ import numpy as np
 
 def get_area(box):
     if box[0] > box[2] or box[1] > box[3]:
-        return None
+        print("invalid box encountered, get_area returning 0")
+        return 0
     area = (box[2] - box[0] + 1) * (box[3] - box[1] + 1)
     return area
 

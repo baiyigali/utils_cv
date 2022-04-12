@@ -7,3 +7,5 @@ to write your content.
 Change Logs
 - v0.0.10
     - add utils_dataset
+- v0.0.11
+    - get_area return 0 if box invalid
